@@ -9,7 +9,6 @@
         * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
         body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
 
-        /* Sidebar tự thích ứng: Ở bên trái trên PC, ở dưới trên Mobile */
         .sidebar { width: 260px; background: var(--panel); border-right: 2px solid #334155; display: flex; flex-direction: column; z-index: 300; }
         @media (max-width: 768px) {
             body { flex-direction: column; }
@@ -20,9 +19,15 @@
         #proof-input { flex-grow: 1; background: #111827; border: none; color: #10b981; padding: 10px; font-size: 13px; outline: none; resize: none; }
 
         .viewport { flex-grow: 1; position: relative; background: #f8fafc; overflow: hidden; order: 1; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        canvas { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            touch-action: none; /* QUAN TRỌNG CHO MOBILE: Ngăn trình duyệt can thiệp vuốt */
+        }
         
-        /* Toolbar tự xuống dòng khi màn hình hẹp */
         .toolbar { position: absolute; top: 10px; left: 10px; z-index: 400; display: flex; gap: 4px; background: var(--panel); padding: 6px; border-radius: 8px; flex-wrap: wrap; max-width: calc(100% - 20px); }
         .tool { padding: 8px 10px; border-radius: 4px; cursor: pointer; border: none; background: transparent; color: white; font-weight: bold; font-size: 10px; white-space: nowrap; }
         .tool.active { background: var(--accent); color: #0f172a; }
@@ -31,9 +36,6 @@
         .btn-shape { background: #334155; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 10px; }
 
         .guide { position: absolute; bottom: 80px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 6px; font-size: 9px; z-index: 200; pointer-events: none; }
-        canvas {
-    touch-action: none; /* Ngăn chặn trình duyệt cuộn trang khi đang vẽ/kéo */
-}
     </style>
 </head>
 <body>
@@ -45,7 +47,7 @@
 
 <div class="viewport" id="stage">
     <div class="toolbar">
-        <button class="tool active" data-mode="move">DI CHUYỂN</button>
+        <button class="tool active" data-mode="move">DI CHUYỂN / ZOOM</button>
         <button class="tool" data-mode="point">ĐIỂM</button>
         <button class="tool" data-mode="segment">ĐOẠN</button>
         <button class="tool" data-mode="midpoint" style="color:#fbbf24">TRUNG ĐIỂM</button>
@@ -61,32 +63,62 @@
     </div>
 
     <canvas id="main-canvas"></canvas>
-    <div class="guide">Nhấn đúp điểm để đổi tên | Giữ chuột phải kéo giấy</div>
+    <div class="guide">1 ngón: Kéo giấy/Điểm | 2 ngón: Phóng to/Thu nhỏ | Đúp điểm: Đổi tên</div>
 </div>
 
 <script>
-    // Toàn bộ logic giữ nguyên như V29 nhưng thêm hỗ trợ Touch cơ bản
     const stage = document.getElementById('stage');
     const canvas = document.getElementById('main-canvas');
     const ctx = canvas.getContext('2d');
-    let points = [], lines = [], selected = [], mode = 'move';
-    let isSelecting = false, selectionBox = null, dragGroup = [];
-    let offset = { x: 0, y: 0 }, isPanning = false, lastMouse = { x: 0, y: 0 };
+    
+    // Trạng thái hình học
+    let points = [], lines = [], counter = 0;
     const alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ";
-    let counter = 0;
+
+    // Trạng thái Viewport (Pan & Zoom)
+    let offset = { x: 0, y: 0 }; // Vị trí gốc tọa độ của giấy
+    let scale = 1;              // Mức phóng to (1 = 100%)
+    const minScale = 0.3, maxScale = 5;
+
+    // Trạng thái Tương tác (Chuột & Touch)
+    let mode = 'move';
+    let selected = [];   // Điểm/đường được chọn để dựng hình
+    let dragGroup = []; // Các điểm đang được kéo đi
+    let isSelecting = false, selectionBox = null;
+    let isPanning = false, lastMouse = { x: 0, y: 0 }; // Dùng cho Pan chuột
+
+    // Trạng thái Đa điểm (Mobile Pinch-to-Zoom)
+    let evCache = []; // Bộ nhớ đệm các điểm chạm
+    let prevDiff = -1; // Khoảng cách giữa 2 ngón tay ở frame trước
 
     function init() {
-        canvas.width = stage.offsetWidth; canvas.height = stage.offsetHeight;
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
         requestAnimationFrame(loop);
+        setupInteraction();
+    }
+
+    function resizeCanvas() {
+        canvas.width = stage.offsetWidth;
+        canvas.height = stage.offsetHeight;
     }
 
     function hardReset() {
         points.length = 0; lines.length = 0; selected.length = 0; dragGroup.length = 0;
-        counter = 0; offset.x = 0; offset.y = 0;
+        counter = 0; offset.x = 0; offset.y = 0; scale = 1;
         document.getElementById('proof-input').value = "";
     }
 
-    function loop() {
+    // Chuyển đổi tọa độ màn hình (pixel) sang tọa độ thế giới (giấy)
+    function screenToWorld(sX, sY) {
+        return {
+            x: (sX - offset.x) / scale,
+            y: (sY - offset.y) / scale
+        };
+    }
+
+    // Cập nhật vị trí các điểm phụ thuộc (trung điểm, chân đường cao...)
+    function updateDependentPoints() {
         points.forEach(p => {
             if (p.type === 'mid') {
                 const p1 = points.find(pt => pt.id === p.parents[0]), p2 = points.find(pt => pt.id === p.parents[1]);
@@ -105,6 +137,10 @@
                 }
             }
         });
+    }
+
+    function loop() {
+        updateDependentPoints();
         render();
         requestAnimationFrame(loop);
     }
@@ -112,51 +148,72 @@
     function render() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.save();
+        
+        // --- Áp dụng Transformation (Pan & Zoom) ---
         ctx.translate(offset.x, offset.y);
-        ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.5;
-        const sX = -offset.x - ((-offset.x) % 40), sY = -offset.y - ((-offset.y) % 40);
-        for(let x=sX; x < canvas.width - offset.x; x+=40) { ctx.beginPath(); ctx.moveTo(x, -offset.y); ctx.lineTo(x, canvas.height - offset.y); ctx.stroke(); }
-        for(let y=sY; y < canvas.height - offset.y; y+=40) { ctx.beginPath(); ctx.moveTo(-offset.x, y); ctx.lineTo(canvas.width - offset.x, y); ctx.stroke(); }
+        ctx.scale(scale, scale);
+
+        // Vẽ lưới (vẽ trong không gian thế giới, lưới sẽ to nhỏ theo zoom)
+        ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.5 / scale; // Giữ nét lưới mảnh
+        const gridS = 40; // Kích thước ô lưới cố định 40 đơn vị
+        const viewX = -offset.x / scale, viewY = -offset.y / scale;
+        const viewW = canvas.width / scale, viewH = canvas.height / scale;
+        
+        const sX = viewX - (viewX % gridS), sY = viewY - (viewY % gridS);
+        for(let x = sX; x < viewX + viewW; x += gridS) { ctx.beginPath(); ctx.moveTo(x, viewY); ctx.lineTo(x, viewY + viewH); ctx.stroke(); }
+        for(let y = sY; y < viewY + viewH; y += gridS) { ctx.beginPath(); ctx.moveTo(viewX, y); ctx.lineTo(viewX + viewW, y); ctx.stroke(); }
+
+        // Vẽ đường thẳng
         lines.forEach(l => {
             const p1 = points.find(p => p.id === l.p1Id), p2 = points.find(p => p.id === (l.footId || l.p2Id));
             if (!p1 || !p2) return;
             ctx.setLineDash(l.type === 'altitude' ? [6, 4] : []);
             ctx.strokeStyle = (selected.includes(l)) ? "#f97316" : (l.type === 'altitude' ? "#8b5cf6" : "#2563eb");
-            ctx.lineWidth = 2.5;
+            ctx.lineWidth = 2.5 / scale; // Giữ độ dày nét vẽ khi zoom
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-            if(l.mark) drawTicks(ctx, p1, p2, l.mark);
+            if(l.mark) drawTicks(ctx, p1, p2, l.mark, scale);
             if(l.type === 'altitude') {
                 const b1 = points.find(p => p.id === l.ref.b1Id), b2 = points.find(p => p.id === l.ref.b2Id);
-                if (b1 && b2) drawSquare(ctx, p1, p2, b1, b2);
+                if (b1 && b2) drawSquare(ctx, p1, p2, b1, b2, scale);
             }
         });
+
+        // Vẽ điểm
         points.forEach(p => {
             const h = dragGroup.includes(p) || selected.includes(p);
+            const r = (h ? 8 : 6) / scale; // Giữ kích thước điểm hợp lý khi zoom
             ctx.fillStyle = h ? "#f59e0b" : (p.type === 'basic' ? "#2563eb" : "#ef4444");
-            ctx.beginPath(); ctx.arc(p.x, p.y, h ? 8 : 6, 0, Math.PI*2); ctx.fill();
-            ctx.fillStyle = "#1e293b"; ctx.font = "bold 13px Arial";
-            ctx.fillText(p.name, p.x + 10, p.y - 10);
+            ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill();
+            
+            // Vẽ tên điểm (giữ kích thước font và offset cố định trên màn hình)
+            ctx.fillStyle = "#1e293b"; ctx.font = `bold ${13/scale}px Arial`;
+            ctx.fillText(p.name, p.x + 10/scale, p.y - 10/scale);
         });
-        ctx.restore();
+
+        ctx.restore(); // Thoát khỏi không gian thế giới
+
+        // Vẽ khung chọn (vẽ trên không gian màn hình)
         if (isSelecting && selectionBox) {
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.8)"; ctx.lineWidth = 1; ctx.setLineDash([]);
             ctx.fillStyle = "rgba(56, 189, 248, 0.15)";
+            ctx.fillRect(selectionBox.x, selectionBox.y, selectionBox.w, selectionBox.h);
             ctx.strokeRect(selectionBox.x, selectionBox.y, selectionBox.w, selectionBox.h);
         }
     }
 
-    function drawTicks(c, p1, p2, count) {
+    function drawTicks(c, p1, p2, count, s) {
         const mx = (p1.x + p2.x)/2, my = (p1.y + p2.y)/2, dx = p2.x - p1.x, dy = p2.y - p1.y, dist = Math.hypot(dx, dy);
-        const nx = -dy/dist * 6, ny = dx/dist * 6;
-        c.setLineDash([]); c.strokeStyle = "#22c55e"; c.lineWidth = 2;
+        const nx = -dy/dist * 6/s, ny = dx/dist * 6/s;
+        c.setLineDash([]); c.strokeStyle = "#22c55e"; c.lineWidth = 2/s;
         for(let i=0; i<count; i++) {
-            const s = (i - (count-1)/2) * 4;
-            c.beginPath(); c.moveTo(mx-nx + (dx/dist)*s, my-ny + (dy/dist)*s); 
-            c.lineTo(mx+nx + (dx/dist)*s, my+ny + (dy/dist)*s); c.stroke();
+            const tickS = (i - (count-1)/2) * 4/s;
+            c.beginPath(); c.moveTo(mx-nx + (dx/dist)*tickS, my-ny + (dy/dist)*tickS); 
+            c.lineTo(mx+nx + (dx/dist)*tickS, my+ny + (dy/dist)*tickS); c.stroke();
         }
     }
 
-    function drawSquare(c, p, h, b1, b2) {
-        const s = 10, d1 = Math.hypot(b1.x-b2.x, b1.y-b2.y), d2 = Math.hypot(p.x-h.x, p.y-h.y);
+    function drawSquare(c, p, h, b1, b2, sc) {
+        const s = 10/sc, d1 = Math.hypot(b1.x-b2.x, b1.y-b2.y), d2 = Math.hypot(p.x-h.x, p.y-h.y);
         if(d1 === 0 || d2 === 0) return;
         const ux = (b1.x-b2.x)/d1, uy = (b1.y-b2.y)/d1, vx = (p.x-h.x)/d2, vy = (p.y-h.y)/d2;
         c.setLineDash([]); c.strokeStyle = "#ef4444"; c.beginPath();
@@ -164,81 +221,265 @@
         c.lineTo(h.x + vx*s, h.y + vy*s); c.stroke();
     }
 
-    stage.onmousedown = e => {
-        const x = e.offsetX - offset.x, y = e.offsetY - offset.y;
-        lastMouse = { x: e.offsetX, y: e.offsetY };
-        if (e.button === 2) { isPanning = true; return; }
-        const hitPt = points.find(p => Math.hypot(p.x - x, p.y - y) < 15);
-        const hitLn = lines.find(l => {
+    // Tìm điểm gần vị trí màn hình sX, sY
+    function findHitPoint(sX, sY) {
+        // Vùng chạm lớn hơn trên mobile (25px) so với PC (15px)
+        const hitRadius = (('ontouchstart' in window) ? 25 : 15) / scale;
+        const wP = screenToWorld(sX, sY);
+        return points.find(p => Math.hypot(p.x - wP.x, p.y - wP.y) < hitRadius);
+    }
+
+    // Tìm đường gần vị trí màn hình sX, sY
+    function findHitLine(sX, sY) {
+        const wP = screenToWorld(sX, sY);
+        return lines.find(l => {
             const p1 = points.find(p => p.id === l.p1Id), p2 = points.find(p => p.id === (l.footId || l.p2Id));
             if(!p1 || !p2) return false;
             const d = Math.hypot(p1.x-p2.x, p1.y-p2.y);
-            return (Math.abs((p2.y-p1.y)*x - (p2.x-p1.x)*y + p2.x*p1.y - p2.y*p1.x) / d) < 10;
+            return (Math.abs((p2.y-p1.y)*wP.x - (p2.x-p1.x)*wP.y + p2.x*p1.y - p2.y*p1.x) / d) < (10/scale);
         });
-        if (mode === 'eraser') {
-            if (hitPt) points.splice(points.indexOf(hitPt), 1);
-            else if (hitLn) lines.splice(lines.indexOf(hitLn), 1);
-            return;
-        }
-        if (mode === 'move') {
-            if (hitPt) dragGroup = [hitPt];
-            else { isSelecting = true; selectionBox = {x: e.offsetX, y: e.offsetY, w:0, h:0}; dragGroup = []; }
-        } else {
-            if (mode === 'point' && !hitPt) points.push({id:Date.now(), x, y, name: alphabet[counter++] || 'P'+counter, type: 'basic'});
-            const hit = hitPt || hitLn;
-            if (hit) {
-                selected.push(hit);
-                if (selected.length === 2) {
-                    const [p1, p2] = selected;
-                    if (mode === 'segment') lines.push({id:Date.now(), p1Id: p1.id, p2Id: p2.id, type: 'basic'});
-                    if (mode === 'midpoint') {
-                        const mId = Date.now(); points.push({id: mId, x:0, y:0, name: 'M'+(++counter), type: 'mid', parents: [p1.id, p2.id]});
-                        lines.push({p1Id: p1.id, p2Id: mId, mark: 1}); lines.push({p1Id: mId, p2Id: p2.id, mark: 1});
-                    }
-                    if (mode === 'opposite') {
-                        const dId = Date.now(); points.push({id: dId, x:0, y:0, name: 'D'+(++counter), type: 'opp', parents: [p1.id, p2.id]});
-                        lines.push({p1Id: p1.id, p2Id: p2.id, mark: 2}); lines.push({p1Id: p2.id, p2Id: dId, mark: 2});
-                    }
-                    if (mode === 'altitude' && p2.p1Id) {
-                        const fId = Date.now(); points.push({id: fId, x:0, y:0, name: 'H'+(++counter), type: 'foot', ref: {topId: p1.id, b1Id: p2.p1Id, b2Id: p2.p2Id}});
-                        lines.push({type: 'altitude', p1Id: p1.id, footId: fId, ref: {b1Id: p2.p1Id, b2Id: p2.p2Id}});
-                    }
-                    selected.length = 0;
-                }
-            }
-        }
-    };
-
-    stage.ondblclick = e => {
-        const x = e.offsetX - offset.x, y = e.offsetY - offset.y;
-        const hitPt = points.find(p => Math.hypot(p.x - x, p.y - y) < 15);
-        if (hitPt) { const n = prompt("Tên mới:", hitPt.name); if(n) hitPt.name = n.toUpperCase(); }
-    };
-
-    stage.onmousemove = e => {
-        if (isPanning) { offset.x += e.offsetX - lastMouse.x; offset.y += e.offsetY - lastMouse.y; lastMouse = { x: e.offsetX, y: e.offsetY }; return; }
-        if (isSelecting) {
-            selectionBox.w = e.offsetX - selectionBox.x; selectionBox.h = e.offsetY - selectionBox.y;
-            const xMin = Math.min(selectionBox.x, e.offsetX)-offset.x, xMax = Math.max(selectionBox.x, e.offsetX)-offset.x;
-            const yMin = Math.min(selectionBox.y, e.offsetY)-offset.y, yMax = Math.max(selectionBox.y, e.offsetY)-offset.y;
-            dragGroup = points.filter(p => p.x > xMin && p.x < xMax && p.y > yMin && p.y < yMax);
-        } else if (dragGroup.length > 0) {
-            const dx = e.offsetX - lastMouse.x, dy = e.offsetY - lastMouse.y;
-            dragGroup.forEach(p => { if(p.type === 'basic') { p.x += dx; p.y += dy; } });
-            lastMouse = { x: e.offsetX, y: e.offsetY };
-        }
-    };
-
-    window.onmouseup = () => { isSelecting = false; selectionBox = null; isPanning = false; if(dragGroup.length === 1) dragGroup.length = 0; };
-    stage.oncontextmenu = e => e.preventDefault();
-
-    function spawn(type) {
-        const cx = 150-offset.x, cy = 200-offset.y, s = 60;
-        let pts = type === 'triangle' ? [{x:cx, y:cy-s}, {x:cx-s, y:cy+s}, {x:cx+s, y:cy+s}] : [{x:cx-s, y:cy-s/2}, {x:cx+s, y:cy-s/2}, {x:cx+s, y:cy+s/2}, {x:cx-s, y:cy+s/2}];
-        const newPs = pts.map(p => { const pt = {id:Math.random(), x:p.x, y:p.y, name:alphabet[counter++]||'P'+counter, type:'basic'}; points.push(pt); return pt; });
-        for(let i=0; i<newPs.length; i++) lines.push({p1Id:newPs[i].id, p2Id:newPs[(i+1)%newPs.length].id, type:'basic'});
     }
 
+    // --- XỬ LÝ TƯƠNG TÁC (CHỈ TOUCH CHO MOBILE) ---
+    function setupInteraction() {
+        if (!('ontouchstart' in window)) {
+            // Setup sự kiện chuột nếu dùng trên PC (giữ nguyên logic cũ)
+            setupMouseInteraction();
+            return;
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Ngăn cuộn trang
+            
+            // Lưu các điểm chạm mới vào cache
+            for (let i=0; i<e.touches.length; i++) evCache.push(e.touches[i]);
+
+            if (evCache.length === 1) {
+                // --- Xử lý 1 ngón tay (Kéo điểm/Pan/Vẽ) ---
+                const t = evCache[0];
+                const rect = canvas.getBoundingClientRect();
+                const sX = t.clientX - rect.left, sY = t.clientY - rect.top;
+                lastMouse = { x: sX, y: sY }; // Lưu vị trí bắt đầu
+
+                const hitPt = findHitPoint(sX, sY);
+
+                if (mode === 'eraser') {
+                    if (hitPt) points.splice(points.indexOf(hitPt), 1);
+                    else { const hitLn = findHitLine(sX, sY); if(hitLn) lines.splice(lines.indexOf(hitLn), 1); }
+                    return;
+                }
+
+                if (mode === 'move') {
+                    if (hitPt) {
+                        dragGroup = [hitPt]; // Bắt đầu kéo điểm
+                    } else {
+                        // Nếu chạm vùng trống ở chế độ Move -> Bắt đầu Pan (kéo giấy)
+                        isPanning = true; 
+                    }
+                } else {
+                    // --- Các chế độ vẽ (Point, Segment...) ---
+                    const wP = screenToWorld(sX, sY);
+                    if (mode === 'point' && !hitPt) {
+                        points.push({id:Date.now(), x:wP.x, y:wP.y, name: alphabet[counter++] || 'P'+counter, type: 'basic'});
+                        return;
+                    }
+
+                    const hitLn = findHitLine(sX, sY);
+                    const hit = hitPt || hitLn;
+                    if (hit) {
+                        if (!selected.includes(hit)) selected.push(hit);
+                        if (selected.length === 2) {
+                            applyGeometryLogic(); // Thực hiện dựng hình
+                            selected.length = 0;
+                        }
+                    }
+                }
+
+            } else if (evCache.length === 2) {
+                // --- Xử lý 2 ngón tay (Chuẩn bị Pinch-to-Zoom) ---
+                isPanning = false; dragGroup = []; // Hủy các thao tác 1 ngón
+                // Tính khoảng cách ban đầu giữa 2 ngón
+                prevDiff = Math.hypot(evCache[0].clientX - evCache[1].clientX, evCache[0].clientY - evCache[1].clientY);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+
+            // Cập nhật vị trí các điểm chạm trong cache
+            for (let i=0; i<e.touches.length; i++) {
+                const index = evCache.findIndex(ev => ev.identifier === e.touches[i].identifier);
+                if (index >= 0) evCache[index] = e.touches[i];
+            }
+
+            if (evCache.length === 1 && !isPanning && dragGroup.length === 0) {
+                 // Xử lý vẽ hình hoặc khung chọn nếu cần (bỏ qua để đơn giản)
+            } else if (evCache.length === 1) {
+                // --- Di chuyển (1 ngón) ---
+                const t = evCache[0];
+                const sX = t.clientX - rect.left, sY = t.clientY - rect.top;
+                const dx = sX - lastMouse.x, dy = sY - lastMouse.y;
+
+                if (isPanning) {
+                    // Pan giấy
+                    offset.x += dx;
+                    offset.y += dy;
+                } else if (dragGroup.length > 0) {
+                    // Kéo điểm (chuyển dx/dy sang không gian thế giới)
+                    dragGroup.forEach(p => { if(p.type === 'basic') { p.x += dx/scale; p.y += dy/scale; } });
+                }
+                lastMouse = { x: sX, y: sY };
+
+            } else if (evCache.length === 2) {
+                // --- Pinch-to-Zoom (2 ngón) ---
+                const t1 = evCache[0], t2 = evCache[1];
+                
+                // 1. TÍNH SCALE MỚI
+                const currentDiff = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                if (prevDiff > 0) {
+                    const sFactor = currentDiff / prevDiff;
+                    const newScale = Math.max(minScale, Math.min(maxScale, scale * sFactor));
+                    
+                    // 2. ĐIỀU CHỈNH OFFSET ĐỂ ZOOM VÀO TÂM GIỮA 2 NGÓN
+                    // Tâm Pinch trên màn hình
+                    const pCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+                    const pCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+                    // Tâm Pinch trong thế giới
+                    const wP = screenToWorld(pCenterX, pCenterY);
+                    
+                    scale = newScale;
+                    // Cập nhật offset để điểm thế giới vẫn nằm đúng vị trí màn hình đó
+                    offset.x = pCenterX - wP.x * scale;
+                    offset.y = pCenterY - wP.y * scale;
+                }
+                prevDiff = currentDiff;
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', (e) => {
+            // Xóa điểm chạm khỏi cache
+            for (let i=0; i<e.changedTouches.length; i++) {
+                const index = evCache.findIndex(ev => ev.identifier === e.changedTouches[i].identifier);
+                if (index >= 0) evCache.splice(index, 1);
+            }
+
+            if (evCache.length < 2) { prevDiff = -1; } // Hủy zoom
+            if (evCache.length === 0) { isPanning = false; dragGroup = []; } // Hủy pan
+        });
+
+        // Xử lý Double Tap để đổi tên (giữ nguyên logic Double Click của bạn)
+        let lastTap = 0;
+        canvas.addEventListener('touchend', (e) => {
+            const now = new Date().getTime();
+            const timesince = now - lastTap;
+            if((timesince < 300) && (timesince > 0)){
+                // Double tap detected
+                const t = e.changedTouches[0];
+                const rect = canvas.getBoundingClientRect();
+                const hitPt = findHitPoint(t.clientX - rect.left, t.clientY - rect.top);
+                if (hitPt) { const n = prompt("Tên mới:", hitPt.name); if(n) hitPt.name = n.toUpperCase(); }
+            }
+            lastTap = now;
+        });
+    }
+
+    // Gom logic dựng hình dùng chung
+    function applyGeometryLogic() {
+        const [p1, p2] = selected;
+        if (mode === 'segment') lines.push({id:Date.now(), p1Id: p1.id, p2Id: p2.id, type: 'basic'});
+        if (mode === 'midpoint') {
+            const mId = Date.now(); points.push({id: mId, x:0, y:0, name: 'M'+(++counter), type: 'mid', parents: [p1.id, p2.id]});
+            lines.push({p1Id: p1.id, p2Id: mId, mark: 1}); lines.push({p1Id: mId, p2Id: p2.id, mark: 1});
+        }
+        if (mode === 'opposite') {
+            const dId = Date.now(); points.push({id: dId, x:0, y:0, name: 'D'+(++counter), type: 'opp', parents: [p1.id, p2.id]});
+            lines.push({p1Id: p1.id, p2Id: p2.id, mark: 2}); lines.push({p1Id: p2.id, p2Id: dId, mark: 2});
+        }
+        if (mode === 'altitude' && p2.p1Id) {
+            const fId = Date.now(); points.push({id: fId, x:0, y:0, name: 'H'+(++counter), type: 'foot', ref: {topId: p1.id, b1Id: p2.p1Id, b2Id: p2.p2Id}});
+            lines.push({type: 'altitude', p1Id: p1.id, footId: fId, ref: {b1Id: p2.p1Id, b2Id: p2.p2Id}});
+        }
+    }
+
+    // --- HÀM SPAWN HÌNH (Cập nhật tọa độ thế giới) ---
+    function spawn(type) {
+        // Spawn vào giữa màn hình hiện tại
+        const viewW = canvas.width / scale, viewH = canvas.height / scale;
+        const cx = (-offset.x / scale) + viewW / 2;
+        const cy = (-offset.y / scale) + viewH / 2;
+        const s = 60 / scale;
+        
+        let pts = type === 'triangle' ? [{x:cx, y:cy-s}, {x:cx-s, y:cy+s}, {x:cx+s, y:cy+s}] : [{x:cx-s, y:cy-s/2}, {x:cx+s, y:cy-s/2}, {x:cx+s, y:cy+s/2}, {x:cx-s, y:cy+s/2}];
+        const newPs = pts.map(p => { const pt = {id:Math.random(), x:p.x, y:p.y, name:alphabet[counter++]||'P'+counter, type:'basic'}; points.push(pt); return pt; });
+        for(let i=0; i<newPs.length; i++) lines.push({id:Date.now(), p1Id:newPs[i].id, p2Id:newPs[(i+1)%newPs.length].id, type:'basic'});
+    }
+
+    // --- LOGIC CHUỘT PC (Giữ nguyên từ V29 để tương thích) ---
+    function setupMouseInteraction() {
+        stage.onmousedown = e => {
+            if (e.button === 2) { isPanning = true; lastMouse = { x: e.offsetX, y: e.offsetY }; return; }
+            const hitPt = findHitPoint(e.offsetX, e.offsetY);
+            
+            if (mode === 'eraser') {
+                if (hitPt) points.splice(points.indexOf(hitPt), 1);
+                else { const hitLn = findHitLine(e.offsetX, e.offsetY); if(hitLn) lines.splice(lines.indexOf(hitLn), 1); }
+                return;
+            }
+            if (mode === 'move') {
+                if (hitPt) dragGroup = [hitPt];
+                else { isSelecting = true; selectionBox = {x: e.offsetX, y: e.offsetY, w:0, h:0}; dragGroup = []; }
+                lastMouse = { x: e.offsetX, y: e.offsetY };
+            } else {
+                const wP = screenToWorld(e.offsetX, e.offsetY);
+                if (mode === 'point' && !hitPt) points.push({id:Date.now(), x:wP.x, y:wP.y, name: alphabet[counter++] || 'P'+counter, type: 'basic'});
+                const hitLn = findHitLine(e.offsetX, e.offsetY);
+                const hit = hitPt || hitLn;
+                if (hit) {
+                    selected.push(hit);
+                    if (selected.length === 2) { applyGeometryLogic(); selected.length = 0; }
+                }
+            }
+        };
+        stage.onmousemove = e => {
+            if (isPanning) { offset.x += e.offsetX - lastMouse.x; offset.y += e.offsetY - lastMouse.y; lastMouse = { x: e.offsetX, y: e.offsetY }; return; }
+            if (isSelecting) {
+                selectionBox.w = e.offsetX - selectionBox.x; selectionBox.h = e.offsetY - selectionBox.y;
+                const xMin = Math.min(selectionBox.x, e.offsetX), xMax = Math.max(selectionBox.x, e.offsetX);
+                const yMin = Math.min(selectionBox.y, e.offsetY), yMax = Math.max(selectionBox.y, e.offsetY);
+                // Chọn điểm trong không gian thế giới
+                dragGroup = points.filter(p => {
+                    const sP = { x: p.x * scale + offset.x, y: p.y * scale + offset.y };
+                    return sP.x > xMin && sP.x < xMax && sP.y > yMin && sP.y < yMax;
+                });
+            } else if (dragGroup.length > 0) {
+                const dx = e.offsetX - lastMouse.x, dy = e.offsetY - lastMouse.y;
+                dragGroup.forEach(p => { if(p.type === 'basic') { p.x += dx/scale; p.y += dy/scale; } });
+                lastMouse = { x: e.offsetX, y: e.offsetY };
+            }
+        };
+        window.onmouseup = () => { isSelecting = false; selectionBox = null; isPanning = false; if(dragGroup.length === 1) dragGroup.length = 0; };
+        stage.oncontextmenu = e => e.preventDefault();
+        stage.ondblclick = e => {
+            const hitPt = findHitPoint(e.offsetX, e.offsetY);
+            if (hitPt) { const n = prompt("Tên mới:", hitPt.name); if(n) hitPt.name = n.toUpperCase(); }
+        };
+        // Zoom bằng lăn chuột
+        canvas.onwheel = e => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const sX = e.clientX - rect.left, sY = e.clientY - rect.top;
+            const wP = screenToWorld(sX, sY); // Điểm thế giới dưới con trỏ
+            
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+            scale = Math.max(minScale, Math.min(maxScale, scale * zoomFactor));
+            
+            offset.x = sX - wP.x * scale;
+            offset.y = sY - wP.y * scale;
+        };
+    }
+
+    // Setup Toolbar
     document.querySelectorAll('.tool').forEach(btn => {
         btn.onclick = () => {
             document.querySelectorAll('.tool').forEach(t => t.classList.remove('active'));
@@ -247,102 +488,6 @@
         };
     });
     window.onload = init;
-    // --- HỖ TRỢ TOUCH CHO MOBILE ---
-stage.addEventListener('touchstart', e => {
-    if (e.touches.length > 0) {
-        const touch = e.touches[0];
-        const rect = canvas.getBoundingClientRect();
-        const x = touch.clientX - rect.left - offset.x;
-        const y = touch.clientY - rect.top - offset.y;
-
-        lastMouse = { x: touch.clientX, y: touch.clientY };
-
-        // Nếu dùng 2 ngón tay => Luôn luôn là di chuyển giấy (Pan)
-        if (e.touches.length >= 2) {
-            isPanning = true;
-            return;
-        }
-
-        const hitPt = points.find(p => Math.hypot(p.x - x, p.y - y) < 25); // Tăng vùng chạm cho mobile
-        
-        if (mode === 'move') {
-            if (hitPt) {
-                dragGroup = [hitPt];
-            } else {
-                // Nếu không chạm trúng điểm nào, dùng 1 ngón tay cũng kéo được giấy
-                isPanning = true; 
-            }
-        } else {
-            // Các mode vẽ khác (Point, Segment...) giữ nguyên logic cũ nhưng đổi sang touch
-            handleActionAt(x, y, hitPt);
-        }
-    }
-}, { passive: false });
-
-stage.addEventListener('touchmove', e => {
-    e.preventDefault(); // Chống cuộn trang
-    if (e.touches.length > 0) {
-        const touch = e.touches[0];
-        const dx = touch.clientX - lastMouse.x;
-        const dy = touch.clientY - lastMouse.y;
-
-        if (isPanning) {
-            offset.x += dx;
-            offset.y += dy;
-        } else if (dragGroup.length > 0) {
-            dragGroup.forEach(p => { if(p.type === 'basic') { p.x += dx; p.y += dy; } });
-        }
-        lastMouse = { x: touch.clientX, y: touch.clientY };
-    }
-}, { passive: false });
-
-stage.addEventListener('touchend', () => {
-    isPanning = false;
-    dragGroup = [];
-    selected.length = 0; // Reset lựa chọn nếu cần
-});
-
-// Hàm bổ trợ để dùng chung logic cho Click và Touch
-function handleActionAt(x, y, hitPt) {
-    if (mode === 'point' && !hitPt) {
-        points.push({id:Date.now(), x, y, name: alphabet[counter++] || 'P'+counter, type: 'basic'});
-        return;
-    }
-    
-    const hitLn = lines.find(l => {
-        const p1 = points.find(p => p.id === l.p1Id), p2 = points.find(p => p.id === (l.footId || l.p2Id));
-        if(!p1 || !p2) return false;
-        const d = Math.hypot(p1.x-p2.x, p1.y-p2.y);
-        return (Math.abs((p2.y-p1.y)*x - (p2.x-p1.x)*y + p2.x*p1.y - p2.y*p1.x) / d) < 15;
-    });
-
-    const hit = hitPt || hitLn;
-    if (hit) {
-        if (!selected.includes(hit)) selected.push(hit);
-        if (selected.length === 2) {
-            applyGeometryLogic(); // Tách logic dựng hình ra hàm riêng để dùng chung
-        }
-    }
-}
-
-// Gom logic xử lý dựng hình từ mousedown cũ vào đây
-function applyGeometryLogic() {
-    const [p1, p2] = selected;
-    if (mode === 'segment') lines.push({id:Date.now(), p1Id: p1.id, p2Id: p2.id, type: 'basic'});
-    if (mode === 'midpoint') {
-        const mId = Date.now(); points.push({id: mId, x:0, y:0, name: 'M'+(++counter), type: 'mid', parents: [p1.id, p2.id]});
-        lines.push({p1Id: p1.id, p2Id: mId, mark: 1}); lines.push({p1Id: mId, p2Id: p2.id, mark: 1});
-    }
-    if (mode === 'opposite') {
-        const dId = Date.now(); points.push({id: dId, x:0, y:0, name: 'D'+(++counter), type: 'opp', parents: [p1.id, p2.id]});
-        lines.push({p1Id: p1.id, p2Id: p2.id, mark: 2}); lines.push({p1Id: p2.id, p2Id: dId, mark: 2});
-    }
-    if (mode === 'altitude' && p2.p1Id) {
-        const fId = Date.now(); points.push({id: fId, x:0, y:0, name: 'H'+(++counter), type: 'foot', ref: {topId: p1.id, b1Id: p2.p1Id, b2Id: p2.p2Id}});
-        lines.push({type: 'altitude', p1Id: p1.id, footId: fId, ref: {b1Id: p2.p1Id, b2Id: p2.p2Id}});
-    }
-    selected.length = 0;
-}
 </script>
 </body>
 </html>

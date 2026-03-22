@@ -3,215 +3,249 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GeoGebra V30 - Mobile Friendly</title>
+    <title>TITAN V37 - FINAL REPAIR</title>
     <style>
         :root { --bg: #0f172a; --panel: #1e293b; --accent: #38bdf8; --text: #f8fafc; }
-        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
-        body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: none; }
+        body { font-family: sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-        .sidebar { width: 260px; background: var(--panel); border-right: 2px solid #334155; display: flex; flex-direction: column; z-index: 300; }
-        @media (max-width: 768px) {
-            body { flex-direction: column; }
-            .sidebar { width: 100%; height: 120px; border-right: none; border-top: 2px solid #334155; order: 2; }
-        }
+        .toolbar { position: absolute; top: 10px; left: 10px; z-index: 100; display: flex; gap: 6px; flex-wrap: wrap; background: rgba(15,23,42,0.9); padding: 8px; border-radius: 12px; border: 1px solid var(--accent); }
+        .btn { padding: 10px; border-radius: 8px; border: none; background: #334155; color: white; font-size: 11px; font-weight: bold; cursor: pointer; min-width: 50px; }
+        .btn.active { background: var(--accent); color: #0f172a; box-shadow: 0 0 10px var(--accent); }
 
-        .sidebar-header { padding: 10px; background: #020617; font-weight: bold; color: var(--accent); text-align: center; font-size: 12px; }
-        #proof-input { flex-grow: 1; background: #111827; border: none; color: #10b981; padding: 10px; font-size: 13px; outline: none; resize: none; }
+        .viewport { flex-grow: 1; position: relative; background: #ffffff; }
+        canvas { width: 100%; height: 100%; display: block; }
 
-        .viewport { flex-grow: 1; position: relative; background: #f8fafc; overflow: hidden; order: 1; }
-        canvas { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            touch-action: none; /* QUAN TRỌNG CHO MOBILE: Ngăn trình duyệt can thiệp vuốt */
-        }
-        
-        .toolbar { position: absolute; top: 10px; left: 10px; z-index: 400; display: flex; gap: 4px; background: var(--panel); padding: 6px; border-radius: 8px; flex-wrap: wrap; max-width: calc(100% - 20px); }
-        .tool { padding: 8px 10px; border-radius: 4px; cursor: pointer; border: none; background: transparent; color: white; font-weight: bold; font-size: 10px; white-space: nowrap; }
-        .tool.active { background: var(--accent); color: #0f172a; }
-        
-        .shape-menu { position: absolute; bottom: 20px; right: 10px; z-index: 400; background: var(--panel); padding: 8px; border-radius: 8px; display: flex; flex-direction: row; gap: 5px; border: 1px solid var(--accent); }
-        .btn-shape { background: #334155; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 10px; }
-
-        .guide { position: absolute; bottom: 80px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 6px; font-size: 9px; z-index: 200; pointer-events: none; }
+        .hud { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 20px; font-size: 12px; border: 1px solid var(--accent); pointer-events: none; }
     </style>
 </head>
 <body>
 
-<div class="sidebar">
-    <div class="sidebar-header">GHI CHÚ / LỜI GIẢI</div>
-    <textarea id="proof-input" placeholder="Nhập lời giải tại đây..."></textarea>
+<div class="toolbar" id="tools">
+    <button class="btn active" data-mode="move">DI CHUYỂN</button>
+    <button class="btn" data-mode="point">ĐIỂM</button>
+    <button class="btn" data-mode="segment">ĐOẠN THẲNG</button>
+    <button class="btn" data-mode="bisector">PHÂN GIÁC</button>
+    <button class="btn" data-mode="altitude">ĐƯỜNG CAO</button>
+    <button class="btn" data-mode="midpoint">TRUNG ĐIỂM</button>
+    <button class="btn" onclick="location.reload()" style="background:#ef4444">RESET</button>
 </div>
 
 <div class="viewport" id="stage">
-    <div class="toolbar">
-        <button class="tool active" data-mode="move">DI CHUYỂN / ZOOM</button>
-        <button class="tool" data-mode="point">ĐIỂM</button>
-        <button class="tool" data-mode="segment">ĐOẠN</button>
-        <button class="tool" data-mode="midpoint" style="color:#fbbf24">TRUNG ĐIỂM</button>
-        <button class="tool" data-mode="opposite" style="color:#fbbf24">TIA ĐỐI</button>
-        <button class="tool" data-mode="altitude">CAO</button>
-        <button class="tool" data-mode="eraser" style="background:#475569">GÔM</button>
-        <button class="tool" style="background:#ef4444" onclick="hardReset()">RESET</button>
-    </div>
-
-    <div class="shape-menu">
-        <button class="btn-shape" onclick="spawn('triangle')">▲ Tam giác</button>
-        <button class="btn-shape" onclick="spawn('rectangle')">█ Hình CN</button>
-    </div>
-
-    <canvas id="main-canvas"></canvas>
-    <div class="guide">1 ngón: Kéo giấy/Điểm | 2 ngón: Phóng to/Thu nhỏ | Đúp điểm: Đổi tên</div>
+    <canvas id="canvas"></canvas>
+    <div class="hud" id="hud">CHẾ ĐỘ: DI CHUYỂN | ZOOM: 100%</div>
 </div>
 
 <script>
-const stage = document.getElementById('stage');
-const canvas = document.getElementById('main-canvas');
+const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
 
-let points = [], lines = [], counter = 0;
-const alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ";
-
-// Viewport State
-let offset = { x: 0, y: 0 };
-let scale = 1;
-const minScale = 0.1, maxScale = 10;
-
-// Interaction State
-let mode = 'move';
-let selected = [];
-let dragGroup = [];
-let isPanning = false;
-let lastTouch = { x: 0, y: 0 };
-let initialPinchDist = 0;
-let initialScale = 1;
+let state = {
+    points: [], elements: [], mode: 'move',
+    offset: { x: 0, y: 0 }, scale: 1,
+    selected: [], dragging: null, isPanning: false,
+    lastP: { x: 0, y: 0 }, pinchDist: 0, initialScale: 1,
+    alphabet: "ABCDEFGHIKLMNOPQRSTUVWXYZ", pIdx: 0
+};
 
 function init() {
     resize();
     window.addEventListener('resize', resize);
-    setupTouch();
-    setupMouse(); // Vẫn giữ cho PC
+    
+    // Gộp Mouse và Touch vào PointerEvents để hỗ trợ Mobile tốt nhất
+    canvas.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    canvas.addEventListener('wheel', onWheel);
+
     requestAnimationFrame(loop);
 }
 
 function resize() {
-    canvas.width = stage.offsetWidth;
-    canvas.height = stage.offsetHeight;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 }
 
-function screenToWorld(sX, sY) {
-    return { x: (sX - offset.x) / scale, y: (sY - offset.y) / scale };
+function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
-// --- HỆ THỐNG TOUCH MỚI (MƯỢT HƠN) ---
-function setupTouch() {
-    canvas.addEventListener('touchstart', e => {
-        e.preventDefault();
-        const touches = e.touches;
+function toWorld(sX, sY) {
+    return { x: (sX - state.offset.x) / state.scale, y: (sY - state.offset.y) / state.scale };
+}
 
-        if (touches.length === 1) {
-            // Xử lý 1 ngón: Kéo điểm hoặc Pan
-            const rect = canvas.getBoundingClientRect();
-            const sX = touches[0].clientX - rect.left;
-            const sY = touches[0].clientY - rect.top;
-            lastTouch = { x: sX, y: sY };
+function onDown(e) {
+    const p = getPos(e);
+    const w = toWorld(p.x, p.y);
+    state.lastP = p;
 
-            const hitPt = findHitPoint(sX, sY);
-            if (mode === 'move') {
-                if (hitPt) {
-                    dragGroup = [hitPt];
-                    isPanning = false;
-                } else {
-                    isPanning = true; // Chạm chỗ trống -> Pan
-                }
-            } else {
-                handleAction(sX, sY, hitPt);
-            }
-        } else if (touches.length === 2) {
-            // Xử lý 2 ngón: Zoom
-            isPanning = false;
-            dragGroup = [];
-            initialPinchDist = Math.hypot(
-                touches[0].clientX - touches[1].clientX,
-                touches[0].clientY - touches[1].clientY
-            );
-            initialScale = scale;
+    // Tìm điểm gần nhất (hitbox rộng cho mobile)
+    const hit = state.points.find(pt => Math.hypot(pt.x - w.x, pt.y - w.y) < 25 / state.scale);
+
+    if (state.mode === 'move') {
+        if (hit) state.dragging = hit; 
+        else state.isPanning = true;
+    } else if (state.mode === 'point') {
+        if (!hit) {
+            state.points.push({ id: Date.now(), x: w.x, y: w.y, name: state.alphabet[state.pIdx++] || 'P'+state.pIdx, type: 'free' });
         }
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', e => {
-        e.preventDefault();
-        const touches = e.touches;
-        const rect = canvas.getBoundingClientRect();
-
-        if (touches.length === 1) {
-            const sX = touches[0].clientX - rect.left;
-            const sY = touches[0].clientY - rect.top;
-            const dx = sX - lastTouch.x;
-            const dy = sY - lastTouch.y;
-
-            if (isPanning) {
-                offset.x += dx;
-                offset.y += dy;
-            } else if (dragGroup.length > 0) {
-                dragGroup.forEach(p => { if(p.type==='basic'){ p.x += dx/scale; p.y += dy/scale; }});
-            }
-            lastTouch = { x: sX, y: sY };
-        } else if (touches.length === 2) {
-            // Pinch to Zoom
-            const currentDist = Math.hypot(
-                touches[0].clientX - touches[1].clientX,
-                touches[0].clientY - touches[1].clientY
-            );
-            const pCenterX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
-            const pCenterY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
-            
-            const wP = screenToWorld(pCenterX, pCenterY);
-            const zoomFactor = currentDist / initialPinchDist;
-            
-            scale = Math.max(minScale, Math.min(maxScale, initialScale * zoomFactor));
-            offset.x = pCenterX - wP.x * scale;
-            offset.y = pCenterY - wP.y * scale;
+    } else {
+        if (hit) {
+            if (!state.selected.includes(hit)) state.selected.push(hit);
+            checkLogic();
         }
-    }, { passive: false });
+    }
+}
 
-    canvas.addEventListener('touchend', e => {
-        // QUAN TRỌNG: Reset khi nhấc tay để lần sau kéo tiếp được
-        if (e.touches.length === 0) {
-            isPanning = false;
-            dragGroup = [];
-        } else if (e.touches.length === 1) {
-            // Nếu còn 1 ngón, cập nhật lại vị trí ngón đó để tránh bị nhảy hình
-            const rect = canvas.getBoundingClientRect();
-            lastTouch = { 
-                x: e.touches[0].clientX - rect.left, 
-                y: e.touches[0].clientY - rect.top 
-            };
+function onMove(e) {
+    const p = getPos(e);
+    const dx = p.x - state.lastP.x;
+    const dy = p.y - state.lastP.y;
+
+    if (state.isPanning) {
+        state.offset.x += dx;
+        state.offset.y += dy;
+    } else if (state.dragging) {
+        state.dragging.x += dx / state.scale;
+        state.dragging.y += dy / state.scale;
+    }
+    state.lastP = p;
+    updateHUD();
+}
+
+function onUp() {
+    state.dragging = null;
+    state.isPanning = false;
+}
+
+function onWheel(e) {
+    e.preventDefault();
+    const zoomSpeed = 0.001;
+    const delta = -e.deltaY;
+    const factor = Math.pow(1.1, delta / 100);
+    
+    const p = getPos(e);
+    const w = toWorld(p.x, p.y);
+    
+    state.scale *= factor;
+    state.offset.x = p.x - w.x * state.scale;
+    state.offset.y = p.y * state.scale; // Fix zoom nhảy
+}
+
+function checkLogic() {
+    const sel = state.selected;
+    const mode = state.mode;
+
+    // 2 Điểm: Đoạn thẳng, Trung điểm
+    if ((mode === 'segment' || mode === 'midpoint') && sel.length === 2) {
+        if (mode === 'segment') state.elements.push({ type: 'seg', pIds: [sel[0].id, sel[1].id] });
+        if (mode === 'midpoint') {
+            const m = { id: Date.now(), x: 0, y: 0, name: 'M'+(state.pIdx++), type: 'mid', deps: [sel[0].id, sel[1].id] };
+            state.points.push(m);
+        }
+        state.selected = [];
+    }
+
+    // 3 Điểm: Phân giác (Điểm 2 là đỉnh), Đường cao (Điểm 1 hạ xuống 2-3)
+    if ((mode === 'bisector' || mode === 'altitude') && sel.length === 3) {
+        if (mode === 'bisector') {
+            const b = { id: Date.now(), x: 0, y: 0, type: 'bisect_ref', deps: [sel[0].id, sel[1].id, sel[2].id], name: '' };
+            state.points.push(b);
+            state.elements.push({ type: 'ray', pIds: [sel[1].id, b.id], color: '#10b981' });
+        }
+        if (mode === 'altitude') {
+            const h = { id: Date.now(), x: 0, y: 0, name: 'H'+(state.pIdx++), type: 'alt', deps: [sel[0].id, sel[1].id, sel[2].id] };
+            state.points.push(h);
+            state.elements.push({ type: 'seg', pIds: [sel[0].id, h.id], color: '#ef4444' });
+        }
+        state.selected = [];
+    }
+    updateHUD();
+}
+
+function loop() {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Grid
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+    const step = 50 * state.scale;
+    for(let x = state.offset.x % step; x < canvas.width; x += step) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+    }
+    for(let y = state.offset.y % step; y < canvas.height; y += step) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+    }
+
+    // Update Phụ thuộc
+    state.points.forEach(p => {
+        const get = id => state.points.find(pt => pt.id === id);
+        if (p.type === 'mid') {
+            const [a, b] = p.deps.map(get);
+            if(a && b) { p.x = (a.x+b.x)/2; p.y = (a.y+b.y)/2; }
+        }
+        if (p.type === 'bisect_ref') {
+            const [p1, v, p2] = p.deps.map(get);
+            if(p1 && v && p2) {
+                const a1 = Math.atan2(p1.y-v.y, p1.x-v.x), a2 = Math.atan2(p2.y-v.y, p2.x-v.x);
+                let a = (a1+a2)/2; if(Math.abs(a1-a2)>Math.PI) a+=Math.PI;
+                p.x = v.x + Math.cos(a)*100; p.y = v.y + Math.sin(a)*100;
+            }
+        }
+        if (p.type === 'alt') {
+            const [p0, a, b] = p.deps.map(get);
+            if(p0 && a && b) {
+                const dx = b.x-a.x, dy = b.y-a.y;
+                const t = ((p0.x-a.x)*dx + (p0.y-a.y)*dy) / (dx*dx + dy*dy);
+                p.x = a.x + t*dx; p.y = a.y + t*dy;
+            }
         }
     });
+
+    // Draw Elements
+    state.elements.forEach(el => {
+        const pts = el.pIds.map(id => state.points.find(p => p.id === id));
+        if(pts.some(p=>!p)) return;
+        ctx.beginPath(); ctx.strokeStyle = el.color || '#0ea5e9'; ctx.lineWidth = 3;
+        if(el.type === 'ray') ctx.setLineDash([10, 5]); else ctx.setLineDash([]);
+        ctx.moveTo(pts[0].x * state.scale + state.offset.x, pts[0].y * state.scale + state.offset.y);
+        if(el.type === 'seg') {
+            ctx.lineTo(pts[1].x * state.scale + state.offset.x, pts[1].y * state.scale + state.offset.y);
+        } else {
+            const ang = Math.atan2(pts[1].y-pts[0].y, pts[1].x-pts[0].x);
+            ctx.lineTo((pts[0].x + Math.cos(ang)*2000)*state.scale + state.offset.x, (pts[0].y + Math.sin(ang)*2000)*state.scale + state.offset.y);
+        }
+        ctx.stroke();
+    });
+
+    // Draw Points
+    state.points.forEach(p => {
+        if(p.name === '' && p.type === 'bisect_ref') return;
+        const sx = p.x * state.scale + state.offset.x, sy = p.y * state.scale + state.offset.y;
+        ctx.beginPath(); ctx.arc(sx, sy, state.selected.includes(p) ? 10 : 7, 0, Math.PI*2);
+        ctx.fillStyle = state.selected.includes(p) ? '#fbbf24' : (p.type==='free'?'#0ea5e9':'#ef4444');
+        ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#000'; ctx.font = 'bold 12px Arial'; ctx.fillText(p.name, sx+10, sy-10);
+    });
+
+    requestAnimationFrame(loop);
 }
 
-// Các hàm bổ trợ
-function findHitPoint(sX, sY) {
-    const wP = screenToWorld(sX, sY);
-    const threshold = 25 / scale; // Vùng chạm lớn cho mobile
-    return points.find(p => Math.hypot(p.x - wP.x, p.y - wP.y) < threshold);
+function updateHUD() {
+    hud.innerText = `CHẾ ĐỘ: ${state.mode.toUpperCase()} | ĐÃ CHỌN: ${state.selected.length} | ZOOM: ${Math.round(state.scale*100)}%`;
 }
 
-function handleAction(sX, sY, hitPt) {
-    const wP = screenToWorld(sX, sY);
-    if (mode === 'point' && !hitPt) {
-        points.push({id:Date.now(), x:wP.x, y:wP.y, name: alphabet[counter++] || 'P'+counter, type: 'basic'});
-        return;
-    }
-    // Logic cho Eraser/Dựng hình tương tự bản cũ...
-    // (Bạn có thể copy lại phần logic applyGeometryLogic của mình ở trên)
-}
+document.querySelectorAll('.btn[data-mode]').forEach(b => {
+    b.onclick = () => {
+        state.mode = b.dataset.mode; state.selected = [];
+        document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+        b.classList.add('active'); updateHUD();
+    };
+});
 
-// Đừng quên hàm render() và loop() từ bản trước để vẽ lên canvas
-// ... (giữ nguyên render, updateDependentPoints, loop)
+init();
 </script>
 </body>
 </html>
